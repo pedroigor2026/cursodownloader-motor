@@ -101,6 +101,43 @@ function capturarMaster(context, getCancelado, timeoutMs) {
   });
 }
 
+// Ouve os m3u8 desde JÁ (attach imediato). CRÍTICO: players com autoplay (ex.: Hotmart, iframe com
+// autoplay=true) pedem o master no INSTANTE em que a página carrega — muito antes de qualquer play
+// nosso. Se o ouvinte só liga depois, esse pedido se perde e nunca acha o vídeo. Por isso a escuta
+// é ligada logo após abrir a aula, ANTES de acharPanda/esperas. `parar()` desliga.
+function iniciarEscutaM3u8(context) {
+  const urls = [];
+  const referers = {};
+  const onReq = (req) => {
+    const u = req.url();
+    if (/\.m3u8/i.test(u)) { urls.push(u); try { referers[u] = req.headers()['referer'] || null; } catch (_) {} }
+  };
+  context.on('request', onReq);
+  return {
+    urls, referers,
+    master: () => { const m = escolherMaster(urls); return { master: m, referer: m ? referers[m] : null }; },
+    parar: () => { try { context.off('request', onReq); } catch (_) {} },
+  };
+}
+
+// Tenta obter o master de uma escuta já ligada, dando play em rodadas (players que só carregam o
+// vídeo após interação). Se o autoplay já trouxe o master, resolve na 1ª checagem sem nem tocar.
+async function obterMaster(page, getCancelado, escuta, rounds, msPorRound) {
+  for (let k = 0; k < rounds; k++) {
+    let r = escuta.master();
+    if (r.master) return r;
+    await darPlay(page);
+    const t0 = Date.now();
+    while (Date.now() - t0 < msPorRound) {
+      r = escuta.master();
+      if (r.master) return r;
+      if (getCancelado && getCancelado()) return { master: null, referer: null };
+      await sleep(500);
+    }
+  }
+  return escuta.master();
+}
+
 // O Chrome bloqueia autoplay com som. Mudo + clique real libera o vídeo a tocar sozinho.
 async function darPlay(page) {
   try { await page.mouse.click(640, 400); } catch (_) {}
@@ -345,6 +382,9 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
         onEvent({ tipo: 'aula', aulaAtual: i + 1, totalAulas: aulas.length, aulaTitulo: aula.name, bloqueadas, pctCurso: pct() });
 
         await page.goto(aula.url, { waitUntil: 'domcontentloaded' }).catch(() => {});
+        // Liga a escuta de m3u8 AGORA (antes de acharPanda/esperas): players com autoplay pedem o
+        // master assim que a página carrega — se esperar, perde. parada no fim de cada caminho.
+        const escuta = iniciarEscutaM3u8(ctx);
         await sleep(1800);
         if (aula.hash) await esperarAte(() => lessons[aula.hash] || (getCancelado && getCancelado()), 8000);
 
@@ -368,6 +408,7 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
         const bloqueada = await page.evaluate(() =>
           /conte[úu]do bloqueado|acesso bloqueado/i.test(document.body.innerText)).catch(() => false);
         if (bloqueada) {
+          escuta.parar();
           bloqueadas++;
           fs.appendFileSync(path.join(destDir, '_aulas_bloqueadas.txt'), `${nome}\n`);
           onEvent({ tipo: 'log', msg: `  aula ${i + 1}: conteúdo bloqueado na sua conta — pulando.` });
@@ -383,6 +424,7 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
         // falha na maioria das aulas) e sem ?token= (com token o Panda entrega um stub de 6s).
         const panda = await acharPanda(page, getCancelado);
         if (panda) {
+          escuta.parar(); // Panda pega a URL do iframe, não precisa da escuta de tráfego
           // Baixa em PARALELO (o navegador já vai buscando a URL da próxima aula enquanto estas
           // baixam). Quantas ao mesmo tempo é decidido pela banda medida — ver limiteAtual().
           const tarefa = (async () => {
@@ -429,6 +471,7 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
         // Sem vídeo Panda mas COM anexo: é uma aula só de material ("Material de Apoio do Módulo").
         // Baixa os arquivos e conta como concluída — não é falha de vídeo.
         if (matPagina.length) {
+          escuta.parar();
           for (const murl of matPagina) await baixarUmMaterial(ctx, murl, destDir, nome, onEvent);
           concluidas++;
           onEvent({ tipo: 'aula_ok', concluidas, bloqueadas, aulaAtual: i + 1, totalAulas: aulas.length, pctCurso: pct() });
@@ -438,18 +481,15 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
 
         let alvo = null, ref = null;
         if (aula.temVideo) {
-          // Play + captura em janelas curtas repetidas: players em iframe montam o <video> com
-          // atraso, então um darPlay único (cedo) não dispara o m3u8.
-          for (let k = 0; k < 6 && !alvo; k++) {
-            await darPlay(page);
-            const cap = await capturarMaster(ctx, getCancelado, 6000);
-            alvo = cap.master; ref = cap.referer;
-            if (getCancelado && getCancelado()) break;
-          }
+          // A escuta já está ligada desde o goto: se o autoplay trouxe o master, obterMaster resolve
+          // na 1ª checagem; senão dá play em rodadas. (Hotmart: master-pkg vem no autoplay.)
+          const cap = await obterMaster(page, getCancelado, escuta, 6, 6000);
+          alvo = cap.master; ref = cap.referer;
           if (!alvo) alvo = await acharYt(6000); // fallback: YouTube mesmo marcado como player Hotmart
         } else {
           alvo = await acharYt(8000); // sem player Hotmart: costuma ser YouTube embutido
         }
+        escuta.parar();
         if (getCancelado && getCancelado()) break;
         if (alvo) {
           if (/youtu/i.test(alvo)) onEvent({ tipo: 'log', msg: '  vídeo do YouTube.' });
@@ -476,15 +516,13 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
       let semVideo = 0;
       for (let n = 1; n <= 500; n++) {
         if (getCancelado && getCancelado()) break;
+        // Escuta ligada ANTES do play (autoplay pode trazer o master já); SmartPlayer monta o <video>
+        // com atraso, então também dá play em rodadas.
+        const escutaFb = iniciarEscutaM3u8(ctx);
         await sleep(2000);
-        // SmartPlayer/iframe monta o <video> com atraso: tenta play + captura em janelas curtas repetidas.
-        let master = null, referer = null;
-        for (let k = 0; k < (n === 1 ? 14 : 5) && !master; k++) {
-          await darPlay(page);
-          const cap = await capturarMaster(ctx, getCancelado, 6000);
-          master = cap.master; referer = cap.referer;
-          if (getCancelado && getCancelado()) break;
-        }
+        const cap = await obterMaster(page, getCancelado, escutaFb, (n === 1 ? 14 : 5), 6000);
+        escutaFb.parar();
+        let master = cap.master, referer = cap.referer;
         if (!master) { if (++semVideo >= 3) break; }
         else {
           semVideo = 0;
