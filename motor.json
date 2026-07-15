@@ -1,10 +1,21 @@
 {
-  "version": 1,
+  "version": 2,
   "data": "2026-07-15",
-  "nota": "motor inicial com aula ao vivo, materiais, master Panda, transcrição paralela",
+  "nota": "TESTE auto-update (mesmo codigo, v2)",
   "arquivos": [
-    "aovivo.js", "auth.js", "binaries.js", "captura.js", "descobrir.js",
-    "downloader.js", "drive.js", "gravador.js", "listar.js", "live.js",
-    "pos_processo.js", "prioridade.js", "proc.js", "store.js"
+    "aovivo.js",
+    "auth.js",
+    "binaries.js",
+    "captura.js",
+    "descobrir.js",
+    "downloader.js",
+    "drive.js",
+    "gravador.js",
+    "listar.js",
+    "live.js",
+    "pos_processo.js",
+    "prioridade.js",
+    "proc.js",
+    "store.js"
   ]
 }
