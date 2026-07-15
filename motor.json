@@ -1,7 +1,7 @@
 {
-  "version": 2,
+  "version": 1,
   "data": "2026-07-15",
-  "nota": "TESTE auto-update (mesmo codigo, v2)",
+  "nota": "motor inicial com aula ao vivo, materiais, master Panda, transcricao paralela",
   "arquivos": [
     "aovivo.js",
     "auth.js",
