@@ -17,7 +17,8 @@ function configPadrao() {
     qualidade: 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
     velocidade_maxima: '0',
     downloads_paralelos: 0, // 0 = automático (decide pela banda medida). 1..3 = fixo.
-    motor_url: '', // URL do motor atualizado (GitHub raw da pasta core/) — aba Atualização
+    // Já vem configurado: toda máquina nova aponta pro repo do motor. Aba Atualização usa isso.
+    motor_url: 'https://raw.githubusercontent.com/pedroigor2026/cursodownloader-motor/main',
     pausar_entre_videos: 10,
     legendas: true,
     // Chaves independentes do que fazer com cada aula:

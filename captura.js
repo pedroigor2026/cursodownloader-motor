@@ -70,7 +70,10 @@ function escolherMaster(urls) {
   // variantes de vídeo por resolução (segmentos reais) — evita áudio-only
   const variantes = m3u8.filter((u) => /\d{3,4}p/i.test(u) && !/audio|_a\d|\d+k\.m3u8|_en_|_pt_\d+k/i.test(u));
   if (variantes.length) return semToken(variantes.slice().sort((a, b) => res(b) - res(a))[0]);
-  const master = m3u8.find((u) => /master\.m3u8/i.test(u)); // HLS master real (Hotmart)
+  // HLS master. A Hotmart (player próprio, vod-akm.play.hotmart.com) nomeia o master como
+  // "master-pkg-t-<num>.m3u8" — não é "master.m3u8" exato nem tem "720p". O yt-dlp lê esse master
+  // e escolhe a melhor variante sozinho. Mantém o token (?hdnts=) — na Hotmart ele é obrigatório.
+  const master = m3u8.find((u) => /master[-.\w]*\.m3u8/i.test(u));
   if (master) return master;
   // NÃO usar playlist.m3u8 do Panda: fora do player ele devolve um stub de ~6s (block_download).
   return null;
@@ -523,7 +526,8 @@ module.exports = { baixarCursoViaCaptura, escolherMaster, urlsDeMaterial };
 if (require.main === module) {
   console.assert(escolherMaster(['https://x/720p/video.m3u8', 'https://x/playlist.m3u8']).includes('720p'), 'prefere variante 720p ao playlist stub');
   console.assert(escolherMaster(['https://x/480p/v.m3u8', 'https://x/1080p/v.m3u8']).includes('1080p'), 'pega maior resolução');
-  console.assert(/master/.test(escolherMaster(['https://x/v.ts', 'https://x/master.m3u8'])), 'usa master.m3u8 real (Hotmart)');
+  console.assert(/master/.test(escolherMaster(['https://x/v.ts', 'https://x/master.m3u8'])), 'usa master.m3u8 real');
+  console.assert(escolherMaster(['https://vod-akm.play.hotmart.com/video/ab/hls/master-pkg-t-123.m3u8?hdnts=tok', 'https://vod-akm.play.hotmart.com/video/ab/hls/ab-123-audio=1-video=2.m3u8']).includes('master-pkg'), 'Hotmart: pega master-pkg-...m3u8 (com token)');
   console.assert(escolherMaster(['https://x/playlist.m3u8']) === null, 'playlist.m3u8 sozinho (Panda stub) = null');
   console.assert(escolherMaster(['https://b-vz-x.tv.pandavideo.com.br/id/720p/video.m3u8?token=abc']) === 'https://b-vz-x.tv.pandavideo.com.br/id/720p/video.m3u8', 'Panda: tira o ?token= (com token vem stub de 6s)');
   console.assert(escolherMaster(['https://stream.smartplayer.io/id_720p.m3u8?token=abc']).includes('token=abc'), 'SmartPlayer: mantém o token');
