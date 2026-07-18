@@ -43,6 +43,8 @@ async function acharPanda(page, getCancelado) {
         const host = u.host.replace(/^player-vz-/, 'b-vz-');
         const base = `https://${host}/${id}`;
         return {
+          videoId: id, // UUID do vídeo no Panda = IDENTIDADE do conteúdo (a mesma gravação pode
+          // aparecer em 2 aulas diferentes com esse mesmo id — é como não re-baixar o conteúdo).
           referer: `https://${u.host}/`,
           urls: [
             `${base}/playlist.m3u8`, // master limpo: yt-dlp escolhe a melhor variante (qualquer nome)
@@ -345,7 +347,26 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
       // Quantas já estão no disco: o card mostra o % do curso desde o primeiro segundo, sem
       // esperar o yt-dlp começar (antes o card ficava em "iniciando…" sem dizer nada).
       const arquivos = fs.readdirSync(destDir).filter((f) => f.toLowerCase().endsWith('.mp4'));
-      const jaNoDisco = aulas.filter((a) => arquivoDaAula(arquivos, a.name)).length;
+      // ÍNDICE de aulas já baixadas, por IDENTIDADE ÚNICA da aula (URL/hash), NÃO por título. É o que
+      // impede re-download SEM perder conteúdo: duas aulas diferentes que só compartilham o título
+      // (ex.: "Valuation" 19min vs 10min, ou "escala 02/07" 1h06 vs 1h56) têm chaves diferentes e
+      // ambas baixam; a MESMA aula listada 2x (mesma URL) baixa uma vez só. `_baixadas.json`: {chave: arquivo}.
+      const idxPath = path.join(destDir, '_baixadas.json');
+      let indice = {};
+      try { indice = JSON.parse(fs.readFileSync(idxPath, 'utf8')); } catch (_) {}
+      const salvarIndice = () => { try { fs.writeFileSync(idxPath, JSON.stringify(indice)); } catch (_) {} };
+      const chaveAula = (a) => a.url || a.hash || a.name;
+      const clamados = new Set(Object.values(indice));
+      // Bootstrap de downloads ANTIGOS (sem índice): adota UM arquivo de mesmo título ainda não
+      // reivindicado por outra chave. Assim os 160 já baixados não re-baixam, mas 2 vídeos de mesmo
+      // título nunca reivindicam o mesmo arquivo (o 2º não acha livre → baixa de verdade).
+      const adotarPorTitulo = (titulo) => {
+        const alvo = sanitizar(titulo).toLowerCase();
+        const f = arquivos.find((x) => !clamados.has(x) && x.toLowerCase().replace(/^\d+\s*-\s*/, '').replace(/\.mp4$/, '') === alvo);
+        if (f) clamados.add(f);
+        return f || null;
+      };
+      const jaNoDisco = arquivos.length;
       // Aulas que já sabemos estar bloqueadas: nem navega de novo (economiza 2s x N a cada passada).
       const arqBloq = path.join(destDir, '_aulas_bloqueadas.txt');
       const jaBloqueadas = new Set(fs.existsSync(arqBloq)
@@ -367,12 +388,16 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
         if (getCancelado && getCancelado()) break;
         const aula = aulas[i];
         const nome = `${String(i + 1).padStart(3, '0')} - ${sanitizar(aula.name)}`;
-        // Já baixada? pula sem navegar/baixar de novo (o título manda, não o número da frente).
-        if (arquivoDaAula(arquivos, aula.name)) {
+        const chave = chaveAula(aula);
+        // Já baixada? Skip por IDENTIDADE (chave), não por título. Exato: nunca re-baixa a mesma
+        // aula, nunca pula uma aula diferente que só tem o mesmo nome.
+        if (indice[chave] && fs.existsSync(path.join(destDir, indice[chave]))) {
           concluidas++;
           onEvent({ tipo: 'aula_ok', concluidas, bloqueadas, aulaAtual: i + 1, totalAulas: aulas.length, pulada: true, pctCurso: pct() });
           continue;
         }
+        // (A adoção de download antigo por título acontece DEPOIS de descobrir o vídeo — no bloco
+        //  Panda — pra registrar também o ID do vídeo. Assim a mesma gravação em 2 aulas não re-baixa.)
         // Já sabíamos que esta é bloqueada (passada anterior): pula sem abrir a página.
         if (jaBloqueadas.has(sanitizar(aula.name))) {
           bloqueadas++;
@@ -425,6 +450,29 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
         const panda = await acharPanda(page, getCancelado);
         if (panda) {
           escuta.parar(); // Panda pega a URL do iframe, não precisa da escuta de tráfego
+          // MESMO VÍDEO já baixado por OUTRA aula? (a plataforma às vezes lista a mesma gravação em
+          // 2 páginas diferentes). O ID do vídeo é a identidade real do conteúdo — se já temos, não
+          // re-baixa. Registra a chave desta aula apontando pro arquivo que já existe.
+          const kv = 'vid:' + panda.videoId;
+          // (1) mesmo VÍDEO já baixado por outra aula (2 páginas, 1 gravação) → não re-baixa.
+          if (panda.videoId && indice[kv] && fs.existsSync(path.join(destDir, indice[kv]))) {
+            indice[chave] = indice[kv]; salvarIndice();
+            concluidas++;
+            onEvent({ tipo: 'log', msg: `  aula ${i + 1}: mesmo vídeo de outra aula — não re-baixa.` });
+            onEvent({ tipo: 'aula_ok', concluidas, bloqueadas, aulaAtual: i + 1, totalAulas: aulas.length, pctCurso: pct() });
+            await sleep(500);
+            continue;
+          }
+          // (2) download ANTIGO desta aula (sem índice ainda): adota o arquivo de mesmo título livre
+          //     e registra AGORA a chave da aula E o ID do vídeo (já sabemos) → não re-baixa depois.
+          const adotado = adotarPorTitulo(aula.name);
+          if (adotado) {
+            indice[chave] = adotado; if (panda.videoId) indice[kv] = adotado; salvarIndice();
+            concluidas++;
+            onEvent({ tipo: 'aula_ok', concluidas, bloqueadas, aulaAtual: i + 1, totalAulas: aulas.length, pulada: true, pctCurso: pct() });
+            await sleep(300);
+            continue;
+          }
           // Baixa em PARALELO (o navegador já vai buscando a URL da próxima aula enquanto estas
           // baixam). Quantas ao mesmo tempo é decidido pela banda medida — ver limiteAtual().
           const tarefa = (async () => {
@@ -450,6 +498,9 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
               fs.removeSync(saida); // stub ou URL inexistente: apaga e tenta a próxima
             }
             if (ok) {
+              indice[chave] = nome + '.mp4'; // chave da aula (URL)
+              if (panda.videoId) indice['vid:' + panda.videoId] = nome + '.mp4'; // identidade do vídeo
+              salvarIndice(); // registra as duas → nunca re-baixa (nem outra aula do mesmo vídeo)
               concluidas++;
               onEvent({ tipo: 'aula_ok', concluidas, bloqueadas, aulaAtual: i + 1, totalAulas: aulas.length, pctCurso: pct() });
             } else { falhas++; onEvent({ tipo: 'log', msg: `  aula ${i + 1}: não consegui baixar o vídeo do Panda.` }); }
@@ -479,6 +530,16 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
           continue;
         }
 
+        // Download antigo desta aula (não-Panda): adota o arquivo de mesmo título livre e registra.
+        const adotadoNP = adotarPorTitulo(aula.name);
+        if (adotadoNP) {
+          escuta.parar();
+          indice[chave] = adotadoNP; salvarIndice();
+          concluidas++;
+          onEvent({ tipo: 'aula_ok', concluidas, bloqueadas, aulaAtual: i + 1, totalAulas: aulas.length, pulada: true, pctCurso: pct() });
+          continue;
+        }
+
         let alvo = null, ref = null;
         if (aula.temVideo) {
           // A escuta já está ligada desde o goto: se o autoplay trouxe o master, obterMaster resolve
@@ -494,7 +555,7 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
         if (alvo) {
           if (/youtu/i.test(alvo)) onEvent({ tipo: 'log', msg: '  vídeo do YouTube.' });
           const r = await baixarM3u8(ytdlp, ffmpeg, alvo, ref, saida, i + 1, aulas.length, onEvent, getCancelado);
-          if (r.code === 0) { concluidas++; onEvent({ tipo: 'aula_ok', concluidas }); }
+          if (r.code === 0) { indice[chave] = nome + '.mp4'; salvarIndice(); concluidas++; onEvent({ tipo: 'aula_ok', concluidas }); }
           else { falhas++; onEvent({ tipo: 'log', msg: `  download da aula ${i + 1} falhou (código ${r.code}).` }); }
         } else if (aula.temVideo) { falhas++; onEvent({ tipo: 'log', msg: `  não achei o vídeo da aula ${i + 1}.` }); }
         // materiais/PDFs: Hotmart vem da lessons API; Kiwify vem da lista (files da API)

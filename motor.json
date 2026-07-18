@@ -1,7 +1,7 @@
 {
-  "version": 3,
-  "data": "2026-07-15",
-  "nota": "Hotmart 100%: reconhece master-pkg + escuta o m3u8 desde o autoplay (antes perdia o vídeo)",
+  "version": 4,
+  "data": "2026-07-18",
+  "nota": "não re-baixa aula já baixada: índice _baixadas.json por identidade (URL/vídeo-id), não por número",
   "arquivos": [
     "aovivo.js", "auth.js", "binaries.js", "captura.js", "descobrir.js",
     "downloader.js", "drive.js", "gravador.js", "listar.js", "live.js",
