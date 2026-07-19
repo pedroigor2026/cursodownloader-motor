@@ -1,7 +1,7 @@
 {
-  "version": 4,
+  "version": 5,
   "data": "2026-07-18",
-  "nota": "não re-baixa aula já baixada: índice _baixadas.json por identidade (URL/vídeo-id), não por número",
+  "nota": "guarda de HD: destino desconectado pausa a fila e retoma sozinho quando o HD volta (evita corromper o disco e marcar curso como erro)",
   "arquivos": [
     "aovivo.js", "auth.js", "binaries.js", "captura.js", "descobrir.js",
     "downloader.js", "drive.js", "gravador.js", "listar.js", "live.js",

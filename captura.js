@@ -264,6 +264,20 @@ const esperarAte = async (cond, timeoutMs) => {
 async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancelado) {
   const { ytdlp, ffmpeg } = await garantirTudo((e) => onEvent({ tipo: 'setup', ...e }));
   const destDir = path.join(config.destino, sanitizar(curso.nome));
+  // HD externo do destino pode sumir no meio (cabo puxado — 16/07 corrompeu o exFAT do E: assim).
+  // Sem esta espera cada aula viraria "falha" e o curso iria pra "erro"; com ela a fila PAUSA e
+  // retoma sozinha quando o HD volta. Checa a RAIZ do drive (a pasta pode ainda não existir).
+  const raizDestino = path.parse(path.resolve(config.destino)).root;
+  const destinoDisponivel = () => { try { fs.accessSync(raizDestino); return true; } catch (_) { return false; } };
+  const esperarDestino = async () => {
+    if (destinoDisponivel()) return true;
+    onEvent({ tipo: 'log', msg: `HD do destino (${raizDestino}) desconectado — downloads em espera. Reconecte o HD.` });
+    while (!destinoDisponivel() && !(getCancelado && getCancelado())) await sleep(5000);
+    const ok = destinoDisponivel();
+    if (ok) onEvent({ tipo: 'log', msg: 'HD reconectado — retomando de onde parou.' });
+    return ok;
+  };
+  await esperarDestino();
   await fs.ensureDir(destDir);
   onEvent({ tipo: 'inicio', destino: destDir });
 
@@ -379,6 +393,7 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
       onEvent({ tipo: 'log', msg: `Curso com ${aulas.length} aula(s) — ${jaNoDisco} já baixada(s).` });
       for (let i = 0; i < aulas.length; i++) {
         if (getCancelado && getCancelado()) break;
+        if (!(await esperarDestino())) break; // HD fora: espera voltar (Pausar cancela a espera)
         // Aula ao vivo rolando com a banda apertada: o curso ESPERA (não perde nada, retoma sozinho).
         let avisou = false;
         while (limiteAtual() === 0 && !(getCancelado && getCancelado())) {
@@ -577,6 +592,7 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
       let semVideo = 0;
       for (let n = 1; n <= 500; n++) {
         if (getCancelado && getCancelado()) break;
+        if (!(await esperarDestino())) break; // HD fora: espera voltar (Pausar cancela a espera)
         // Escuta ligada ANTES do play (autoplay pode trazer o master já); SmartPlayer monta o <video>
         // com atraso, então também dá play em rodadas.
         const escutaFb = iniciarEscutaM3u8(ctx);
