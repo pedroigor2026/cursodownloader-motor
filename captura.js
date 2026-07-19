@@ -312,10 +312,20 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
     onEvent({ tipo: 'log', msg: 'Abrindo o curso. Se pedir login, faça login na janela — depois é automático.' });
     await page.goto(curso.url, { waitUntil: 'domcontentloaded' }).catch(() => {});
 
-    // Espera a lista de aulas (Hotmart/Kiwify/Greenn). Até 3 min pra dar tempo de logar.
+    // Espera a lista de aulas (Hotmart/Kiwify/Greenn). Com login salvo no perfil ela chega em
+    // segundos — 60s já cobre rede lenta. (Era 180s "pra dar tempo de logar", mas isso fazia cada
+    // curso EXPIRADO prender a fila por 3 min; quem precisa logar usa o botão de login.)
     // Plataformas SEM essa API (ex.: varejoativo/Curseduca) não disparam nada — espera curta e vai pro fallback.
     const temApi = /hotmart\.com|kiwify|greenn\.club/i.test(curso.url || '');
-    await esperarAte(() => navHotmart || cursoKiwify || cursoGreenn || (getCancelado && getCancelado()), temApi ? 180000 : 8000);
+    await esperarAte(() => navHotmart || cursoKiwify || cursoGreenn || (getCancelado && getCancelado()), temApi ? 60000 : 8000);
+    // Pausado durante a espera: devolve cancelado (curso volta a pendente), não erro.
+    if (getCancelado && getCancelado()) return { sucesso: false, cancelado: true, destino: destDir, concluidas: 0, total: null, falhas: 0 };
+    // Plataforma COM API que não entregou lista = acesso expirado ou login caído. O fallback de
+    // clicar "próxima" NUNCA funciona nesses SPAs — só queimava ~2 min por curso. Sai na hora.
+    if (temApi && !navHotmart && !cursoKiwify && !cursoGreenn) {
+      return { sucesso: false, destino: destDir, concluidas: 0, total: 0, falhas: 0, bloqueadas: 0, completo: false,
+        erro: 'Sem acesso ao curso (expirado ou login caído) — a lista de aulas não veio.' };
+    }
 
     let concluidas = 0;
     let falhas = 0;   // aulas onde havia vídeo mas o download falhou (trava de completude)
