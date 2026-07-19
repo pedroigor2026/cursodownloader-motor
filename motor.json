@@ -1,7 +1,7 @@
 {
-  "version": 5,
+  "version": 6,
   "data": "2026-07-18",
-  "nota": "guarda de HD: destino desconectado pausa a fila e retoma sozinho quando o HD volta (evita corromper o disco e marcar curso como erro)",
+  "nota": "guarda de HD completa: pausa/retoma sozinho, apaga parciais interrompidos pra re-baixar limpo e emite hd_incidente (o app propõe chkdsk)",
   "arquivos": [
     "aovivo.js", "auth.js", "binaries.js", "captura.js", "descobrir.js",
     "downloader.js", "drive.js", "gravador.js", "listar.js", "live.js",

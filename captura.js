@@ -156,6 +156,10 @@ async function darPlay(page) {
 }
 
 // Baixa um .m3u8 com o yt-dlp, emitindo progresso (pct/velocidade/ETA) pra UI.
+// Arquivos em gravação NESTE instante — se o HD cair no meio, são os suspeitos de corrupção
+// (a guarda de HD apaga os parciais deles pra aula re-baixar limpa).
+const emEscrita = new Set();
+
 function baixarM3u8(ytdlp, ffmpeg, master, referer, saida, aulaAtual, totalAulas, onEvent, getCancelado) {
   const bundle = caBundlePath();
   const env = { ...process.env };
@@ -181,6 +185,7 @@ function baixarM3u8(ytdlp, ffmpeg, master, referer, saida, aulaAtual, totalAulas
   log(`URL: ${master}\n  ref: ${referer}\n  saida: ${path.basename(saida)}`);
   const bytesAntes = fs.existsSync(saida) ? fs.statSync(saida).size : 0; // retomada não conta como banda
   const t0 = Date.now();
+  emEscrita.add(saida);
   return new Promise((resolve) => {
     const proc = spawn(ytdlp, args, { env });
     const rl = readline.createInterface({ input: proc.stdout });
@@ -196,6 +201,7 @@ function baixarM3u8(ytdlp, ffmpeg, master, referer, saida, aulaAtual, totalAulas
     const timer = setInterval(() => { if (getCancelado && getCancelado()) { matarArvore(proc); clearInterval(timer); } }, 500);
     proc.on('close', (code) => {
       clearInterval(timer);
+      emEscrita.delete(saida);
       let bytes = 0; try { bytes = fs.statSync(saida).size; } catch (_) {}
       const seg = (Date.now() - t0) / 1000;
       // MB/s reais desta aula — é isso que mede a banda do lugar onde o note está agora.
@@ -204,7 +210,7 @@ function baixarM3u8(ytdlp, ffmpeg, master, referer, saida, aulaAtual, totalAulas
       log(`  fim code=${code} ${Math.round(bytes / 1024)}KB${bytes > 0 && bytes < STUB_BYTES ? '  *** STUB ***' : ''}${mbs ? ` ${mbs.toFixed(1)}MB/s` : ''}`);
       resolve({ code, mbs });
     });
-    proc.on('error', () => { clearInterval(timer); resolve({ code: -1 }); });
+    proc.on('error', () => { clearInterval(timer); emEscrita.delete(saida); resolve({ code: -1 }); });
   });
 }
 
@@ -271,11 +277,18 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
   const destinoDisponivel = () => { try { fs.accessSync(raizDestino); return true; } catch (_) { return false; } };
   const esperarDestino = async () => {
     if (destinoDisponivel()) return true;
+    const afetados = [...emEscrita]; // aulas que estavam GRAVANDO no instante da queda
     onEvent({ tipo: 'log', msg: `HD do destino (${raizDestino}) desconectado — downloads em espera. Reconecte o HD.` });
     while (!destinoDisponivel() && !(getCancelado && getCancelado())) await sleep(5000);
-    const ok = destinoDisponivel();
-    if (ok) onEvent({ tipo: 'log', msg: 'HD reconectado — retomando de onde parou.' });
-    return ok;
+    if (!destinoDisponivel()) return false;
+    // Arquivo interrompido no meio da gravação = suspeito de corrupção (caso 16/07: referência
+    // cruzada no exFAT). Apaga o parcial — a aula re-baixa limpa sozinha (o skip é por índice).
+    for (const s of afetados)
+      for (const p of [s, s + '.part', s + '.ytdl', s.replace(/\.mp4$/i, '.temp.mp4')])
+        { try { fs.removeSync(p); } catch (_) {} }
+    onEvent({ tipo: 'hd_incidente', drive: raizDestino, interrompidos: afetados.length });
+    onEvent({ tipo: 'log', msg: `HD reconectado — retomando. ${afetados.length ? `${afetados.length} download(s) interrompido(s) apagado(s) pra re-baixar limpo. ` : ''}O disco pode ter ficado corrompido — o app vai propor a correção.` });
+    return true;
   };
   await esperarDestino();
   await fs.ensureDir(destDir);
