@@ -27,6 +27,8 @@ async function abrirNavegador(dataDir, oculto) {
     // A rede do Pedro intercepta TLS (antivírus/proxy) — sem isso, ctx.request.get (usado pra baixar
     // PDFs/materiais) falha com "unable to verify the first certificate". Aplica ao page E ao request.
     ignoreHTTPSErrors: true,
+    // produtos só-de-arquivo (ebook Hotmart) baixam via evento 'download' do clique "Baixar arquivo"
+    acceptDownloads: true,
     args: [...janela, '--disable-blink-features=AutomationControlled',
       // some com o balão "restaurar páginas" e barras de aviso ao reabrir
       '--disable-session-crashed-bubble', '--hide-crash-restore-bubble', '--disable-infobars', '--no-first-run'],

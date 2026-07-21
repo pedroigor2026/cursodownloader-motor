@@ -1,7 +1,7 @@
 {
-  "version": 7,
-  "data": "2026-07-19",
-  "nota": "curso expirado não prende a fila: espera da API 180s→60s e sai na hora (sem fallback cego) quando a lista de aulas não vem",
+  "version": 8,
+  "data": "2026-07-21",
+  "nota": "produtos Hotmart só de arquivos (ebook/anexo): baixa via club-drive + clique 'Baixar arquivo' em vez de errar 'Sem acesso'",
   "arquivos": [
     "aovivo.js", "auth.js", "binaries.js", "captura.js", "descobrir.js",
     "downloader.js", "drive.js", "gravador.js", "listar.js", "live.js",

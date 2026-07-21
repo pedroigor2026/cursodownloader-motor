@@ -12,7 +12,9 @@ async function fazerLogin(plataforma, loginUrl, dataDir, onEvent) {
   }
 
   const cookiesDir = path.join(dataDir, 'cookies');
-  const profileDir = path.join(dataDir, 'profiles', plataforma);
+  // Mesmo perfil que core/captura.js usa pra baixar (profiles/drm) — antes o login ficava
+  // isolado em profiles/{plataforma}, uma pasta que o downloader nunca lia, e o login "sumia".
+  const profileDir = path.join(dataDir, 'profiles', 'drm');
   await fs.ensureDir(cookiesDir);
   await fs.ensureDir(profileDir);
 

@@ -295,7 +295,12 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
   onEvent({ tipo: 'inicio', destino: destDir });
 
   const ctx = await abrirNavegador(dataDir, true); // oculto: janela fora da tela, não atrapalha o PC
-  let navHotmart = null, cursoKiwify = null, cursoGreenn = null;
+  // Liga ANTES de navegar: alguns players (ex.: Panda Video em iframe) pedem o .m3u8 assim que a
+  // página carrega e guardam o vídeo num blob — não pedem de novo quando o app clica em "play"
+  // depois. Ligar a escuta só dentro do loop do fallback (como era antes) perdia esse pedido inicial
+  // e o curso nunca achava vídeo nenhum, mesmo logado (achado 20/07, curso Método GEM).
+  const escutaInicial = iniciarEscutaM3u8(ctx);
+  let navHotmart = null, cursoKiwify = null, cursoGreenn = null, arquivosClub = null;
   const lessons = {}; // Hotmart: dados da aula (inclui materiais)
   ctx.on('response', async (res) => {
     const u = res.url();
@@ -304,6 +309,8 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
       else if (/\/v2\/web\/lessons\//i.test(u)) { const j = await res.json(); if (j && j.hash) lessons[j.hash] = j; }
       else if (/\/v1\/viewer\/courses\/[0-9a-f-]+(\?|$)/i.test(u)) { const j = await res.json(); if (j && j.course) cursoKiwify = j; }
       else if (/api\.greenn\.club\/course\/\d+\/watch/i.test(u)) { const j = await res.json(); if (j && j.course) cursoGreenn = j; }
+      // Produto Hotmart SEM aulas (ebook/arquivo): a página dispara o club-drive com a lista de arquivos.
+      else if (/club-drive-api\/rest\/v1\/purchase\/\d+\/content/i.test(u)) { const j = await res.json(); if (j && Array.isArray(j.fileList) && j.fileList.length) arquivosClub = j.fileList; }
     } catch (_) {}
   });
 
@@ -317,12 +324,53 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
     // curso EXPIRADO prender a fila por 3 min; quem precisa logar usa o botão de login.)
     // Plataformas SEM essa API (ex.: varejoativo/Curseduca) não disparam nada — espera curta e vai pro fallback.
     const temApi = /hotmart\.com|kiwify|greenn\.club/i.test(curso.url || '');
-    await esperarAte(() => navHotmart || cursoKiwify || cursoGreenn || (getCancelado && getCancelado()), temApi ? 60000 : 8000);
+    // URL /products/<id>/ebook não tem aulas — o sinal dela é o club-drive (lista de arquivos).
+    const ehEbook = /\/products\/\d+\/ebook\b/i.test(curso.url || '');
+    await esperarAte(() => navHotmart || cursoKiwify || cursoGreenn || (ehEbook && arquivosClub) || (getCancelado && getCancelado()), temApi ? 60000 : 8000);
     // Pausado durante a espera: devolve cancelado (curso volta a pendente), não erro.
     if (getCancelado && getCancelado()) return { sucesso: false, cancelado: true, destino: destDir, concluidas: 0, total: null, falhas: 0 };
     // Plataforma COM API que não entregou lista = acesso expirado ou login caído. O fallback de
     // clicar "próxima" NUNCA funciona nesses SPAs — só queimava ~2 min por curso. Sai na hora.
     if (temApi && !navHotmart && !cursoKiwify && !cursoGreenn) {
+      // Produto só de arquivos (ebook/anexo): baixa cada arquivo clicando no card + "Baixar arquivo"
+      // (fetch direto na api-hub morre em CORS; o clique usa a sessão do navegador e sempre funciona).
+      if (arquivosClub) {
+        let okArq = 0, falhasArq = 0;
+        onEvent({ tipo: 'curso_info', total: arquivosClub.length, prontas: 0, pctCurso: 0 });
+        await page.evaluate(() => { const a = [...document.querySelectorAll('button, a, [role=tab]')].find((b) => /conte[uú]dos/i.test(b.textContent || '')); if (a) a.click(); }).catch(() => {});
+        await sleep(3000);
+        for (const arq of arquivosClub) {
+          const destino = path.join(destDir, sanitizar(arq.name));
+          onEvent({ tipo: 'aula', aulaAtual: okArq + falhasArq + 1, totalAulas: arquivosClub.length, aulaTitulo: arq.name, bloqueadas: 0, pctCurso: Math.round((okArq / arquivosClub.length) * 100) });
+          if (fs.existsSync(destino) && fs.statSync(destino).size > 0) { okArq++; onEvent({ tipo: 'aula_ok', concluidas: okArq, pulada: true }); continue; }
+          try {
+            // card do arquivo (elemento folha com o nome) → botão "Baixar arquivo" (é aria-label, não texto)
+            const alvo = await page.evaluate((nome) => {
+              const todos = [...document.querySelectorAll('*')].filter((e) => e.children.length === 0 && (e.textContent || '').includes(nome));
+              if (!todos.length) return null;
+              const e = todos[todos.length - 1]; const r = e.getBoundingClientRect();
+              return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+            }, arq.name);
+            if (alvo) { await page.mouse.click(alvo.x, alvo.y); await sleep(3000); }
+            const esperaDownload = page.waitForEvent('download', { timeout: 60000 });
+            const clicou = await page.evaluate(() => {
+              const b = [...document.querySelectorAll('button, a')].find((e) => /baixar arquivo/i.test((e.getAttribute('aria-label') || '') + ' ' + (e.textContent || '')));
+              if (b) { b.click(); return true; } return false;
+            });
+            if (!clicou) throw new Error('botão "Baixar arquivo" não apareceu');
+            const dl = await esperaDownload;
+            await dl.saveAs(destino);
+            okArq++;
+            onEvent({ tipo: 'aula_ok', concluidas: okArq });
+            onEvent({ tipo: 'log', msg: `  arquivo salvo: ${sanitizar(arq.name)}` });
+          } catch (e) {
+            falhasArq++;
+            onEvent({ tipo: 'log', msg: `  arquivo "${arq.name}" falhou: ${e.message}` });
+          }
+        }
+        return { sucesso: falhasArq === 0, destino: destDir, concluidas: okArq, total: arquivosClub.length, falhas: falhasArq, bloqueadas: 0,
+          completo: arquivosClub.length > 0 && falhasArq === 0 };
+      }
       return { sucesso: false, destino: destDir, concluidas: 0, total: 0, falhas: 0, bloqueadas: 0, completo: false,
         erro: 'Sem acesso ao curso (expirado ou login caído) — a lista de aulas não veio.' };
     }
@@ -618,8 +666,10 @@ async function baixarCursoViaCaptura(curso, config, dataDir, onEvent, getCancela
         if (!(await esperarDestino())) break; // HD fora: espera voltar (Pausar cancela a espera)
         // Escuta ligada ANTES do play (autoplay pode trazer o master já); SmartPlayer monta o <video>
         // com atraso, então também dá play em rodadas.
-        const escutaFb = iniciarEscutaM3u8(ctx);
-        await sleep(2000);
+        // Aula 1: reaproveita a escuta ligada antes mesmo do goto (pega o pedido que alguns players
+        // disparam já no carregamento da página, antes de qualquer "próxima aula" existir).
+        const escutaFb = n === 1 ? escutaInicial : iniciarEscutaM3u8(ctx);
+        if (n > 1) await sleep(2000);
         const cap = await obterMaster(page, getCancelado, escutaFb, (n === 1 ? 14 : 5), 6000);
         escutaFb.parar();
         let master = cap.master, referer = cap.referer;

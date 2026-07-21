@@ -10,7 +10,7 @@ const { baixarDoDrive, ehCaminhoLocal } = require('./drive');
 // real pelo navegador logado (ver captura.js).
 const PLATAFORMAS_CAPTURA = ['hotmart', 'kiwify', 'greenn'];
 // varejoativo.online = Curseduca + SmartPlayer (vídeo HLS em iframe) — captura por navegação.
-const URL_CAPTURA = /hotmart\.com|kiwify|greenn\.club|varejoativo\.online|vivapositivamente\.com\.br/i; // detecta por URL também
+const URL_CAPTURA = /hotmart\.com|kiwify|greenn\.club|varejoativo\.online|vivapositivamente\.com\.br|leandropitelli\.com\.br/i; // detecta por URL também
 
 function detectarPlataforma(url, config) {
   for (const [nome, info] of Object.entries(config.plataformas)) {
